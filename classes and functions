@@ -1,0 +1,622 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Runtime.Serialization.Formatters.Binary;
+using System.Windows.Forms;
+
+namespace Scene
+{
+    [Serializable]
+    public abstract class Shape
+    {
+        public Point Location { get; set; }
+        public Point CoordsStart { get; set; }
+        public Point CoordsEnd { get; set; }
+        public Color ColorBorder { get; set; }
+        public Color ColorFill { get; set; }
+        public bool Selected { get; set; }
+
+        public abstract void Paint(Graphics graphics, int thickness);
+
+        public abstract bool PointInShape(Point point);
+
+        public abstract Point CoordsConvert(string coords);
+
+        public abstract bool Intersect(Rectangle rectangle);
+
+        public abstract int Area { get; }
+    }
+    
+    [Serializable]
+    public class Circle : Shape
+    {
+        public int Radius { get; set; }
+
+        public override void Paint(Graphics graphics, int thickness = 1)
+        {
+            var colorBorder = Selected
+                ? Color.Red
+                : ColorBorder;
+
+            using (var brush = new SolidBrush(ColorFill))
+                graphics.FillEllipse(brush, Location.X, Location.Y, 2 * Radius, 2 * Radius);
+
+            using (var pen = new Pen(colorBorder))
+                graphics.DrawEllipse(pen, Location.X, Location.Y, 2 * Radius, 2 * Radius);
+        }
+
+        public override bool PointInShape(Point point)
+        {
+            return
+                Location.X <= point.X && point.X <= Location.X + 2 * Radius &&
+                Location.Y <= point.Y && point.Y <= Location.Y + 2 * Radius;
+        }
+
+        public override bool Intersect(Rectangle rectangle)
+        {
+            return
+                Location.X < rectangle.Location.X + rectangle.Width && rectangle.Location.X < Location.X + 2 * Radius &&
+                Location.Y < rectangle.Location.Y + rectangle.Height && rectangle.Location.Y < Location.Y + 2 * Radius;
+        }
+
+        public override Point CoordsConvert(string coords)
+        {
+            Point tempPoint = new Point();
+            var X = true;
+            for (int i = 0; i < coords.Length; i++)
+            {
+                if (coords[i] >= '0' && coords[i] <= '9')
+                {
+                    if (X == true)
+                    {
+                        tempPoint.X *= 10;
+                        tempPoint.X += coords[i] - '0';
+                    }
+                    else
+                    {
+                        tempPoint.Y *= 10;
+                        tempPoint.Y += coords[i] - '0';
+                    }
+                }
+                else if (coords[i] == ',')
+                    X = false;
+            }
+            return tempPoint;
+        }
+
+        public override int Area => (int)(3.14 * (Radius * Radius));
+    }
+    
+    [Serializable]
+    public class Rectangle : Shape
+    {
+        public int Height { get; set; }
+
+        private int _width;
+        public int Width {
+            get
+            {
+                return _width;
+            }
+            set 
+            {
+                if (value > 0)
+                    _width = value;
+            }
+        }
+
+        public override void Paint(Graphics graphics, int thickness = 1)
+        {
+            var colorBorder = Selected
+                ? Color.Red
+                : ColorBorder;
+
+            using (var brush = new SolidBrush(ColorFill))
+                graphics.FillRectangle(brush, Location.X, Location.Y, Width, Height);
+
+            using (var pen = new Pen(colorBorder, thickness))
+                graphics.DrawRectangle(pen, Location.X, Location.Y, Width, Height);
+        }
+
+        public override bool PointInShape(Point point)
+        {
+            return
+                Location.X <= point.X && point.X <= Location.X + Width &&
+                Location.Y <= point.Y && point.Y <= Location.Y + Height;
+        }
+
+        public override bool Intersect(Rectangle rectangle)
+        {
+            return
+                Location.X < rectangle.Location.X + rectangle.Width && rectangle.Location.X < Location.X + Width &&
+                Location.Y < rectangle.Location.Y + rectangle.Height && rectangle.Location.Y < Location.Y + Height;
+        }
+
+        public override Point CoordsConvert(string coords)
+        {
+            Point tempPoint = new Point();
+            var X = true;
+            for (int i = 0; i < coords.Length; i++)
+            {
+                if (coords[i] >= '0' && coords[i] <= '9')
+                {
+                    if (X == true)
+                    {
+                        tempPoint.X *= 10;
+                        tempPoint.X += coords[i] - '0';
+                    }
+                    else
+                    {
+                        tempPoint.Y *= 10;
+                        tempPoint.Y += coords[i] - '0';
+                    }
+                }
+                else if (coords[i] == ',')
+                    X = false;
+            }
+            return tempPoint;
+        }
+
+        public override int Area => Width * Height;
+    }
+
+    public delegate bool WherePredicate<T>(T rectangle);
+
+    static class Extensions
+    {
+        public static List<T> Where<T>(
+            this List<T> rectangles,
+            WherePredicate<T> wherePredicate)
+        {
+            var result = new List<T>();
+            for (int r = 0; r < rectangles.Count; r++)
+                if (wherePredicate(rectangles[r]))
+                    result.Add(rectangles[r]);
+
+            return result;
+        }
+    }
+
+    public partial class FormScene : Form
+    {
+        private List<Shape> _shapes = new List<Shape>();
+        private Point _mouseCapturedLocation;
+        private Rectangle _frameRectangle;
+        private Circle _frameCircle;
+        private int DrawMode = 0; // 0 - Rectangle, 1 = Circle
+        private bool shapeMove = false;
+
+        public int area()
+        {
+            var area = 0;
+            for (int shape = 0; shape < _shapes.Count(); shape++)
+                area += _shapes[shape].Area;
+
+            return area;
+        }
+
+        public FormScene()
+        {
+            InitializeComponent();
+
+            SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer,
+                true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            foreach (var r in _shapes)
+                r.Paint(e.Graphics, 1);
+
+            _frameRectangle?.Paint(e.Graphics, 2);
+            _frameCircle?.Paint(e.Graphics, 2);
+        }
+
+        private void FormScene_MouseDown(object sender, MouseEventArgs e)
+        {
+            foreach (var selectedShape in _shapes)
+                if (selectedShape.PointInShape(e.Location))
+                {
+                    selectedShape.Selected = selectedShape.PointInShape(e.Location);
+                    shapeMove = true;
+                }
+                else
+                    selectedShape.Selected = false;
+
+            _mouseCapturedLocation = e.Location;
+            if (!shapeMove)
+            {
+                if (DrawMode == 0 || e.Button == MouseButtons.Left)
+                {
+                    _frameRectangle = new Rectangle
+                    {
+                        ColorBorder = Color.LightGray
+                    };
+                }
+                else if (DrawMode == 1)
+                {
+                    _frameCircle = new Circle
+                    {
+                        ColorBorder = Color.LightGray
+                    };
+                }
+            }
+            Invalidate();
+        }
+
+        private void FormScene_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                if (_frameRectangle != null && shapeMove == false)
+                {
+                    _frameRectangle.Location = new Point
+                    {
+                        X = Math.Min(_mouseCapturedLocation.X, e.Location.X),
+                        Y = Math.Min(_mouseCapturedLocation.Y, e.Location.Y)
+                    };
+                    _frameRectangle.Width = Math.Abs(_mouseCapturedLocation.X - e.Location.X);
+                    _frameRectangle.Height = Math.Abs(_mouseCapturedLocation.Y - e.Location.Y);
+                    _frameRectangle.CoordsStart = _mouseCapturedLocation;
+                    _frameRectangle.CoordsEnd = e.Location;
+
+                    foreach (var shape in _shapes)
+                        shape.Selected = shape.Intersect(_frameRectangle);
+                }
+                else if (shapeMove == true)
+                {
+                    foreach (var selectedShape in _shapes)
+                        if(selectedShape.Selected)
+                        {
+                            selectedShape.Location = e.Location;
+                            selectedShape.CoordsStart = e.Location;
+                        }
+                }
+            }
+
+            if (DrawMode == 0 && _frameRectangle != null)
+            {
+                _frameRectangle.Location = new Point
+                {
+                    X = Math.Min(_mouseCapturedLocation.X, e.Location.X),
+                    Y = Math.Min(_mouseCapturedLocation.Y, e.Location.Y)
+                };
+                _frameRectangle.Width = Math.Abs(_mouseCapturedLocation.X - e.Location.X);
+                _frameRectangle.Height = Math.Abs(_mouseCapturedLocation.Y - e.Location.Y);
+                _frameRectangle.CoordsStart = _mouseCapturedLocation;
+                _frameRectangle.CoordsEnd = e.Location;
+            }
+            else if (DrawMode == 1 && _frameCircle != null)
+            {
+                _frameCircle.Location = new Point
+                {
+                    X = Math.Min(_mouseCapturedLocation.X, e.Location.X),
+                    Y = Math.Min(_mouseCapturedLocation.Y, e.Location.Y)
+                };
+                _frameCircle.Radius = Math.Abs(_mouseCapturedLocation.X - e.Location.X);
+                _frameCircle.CoordsStart = _mouseCapturedLocation;
+                _frameCircle.CoordsEnd = e.Location;
+            }
+
+            Invalidate();
+        }
+
+        private void FormScene_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (shapeMove == true)
+                shapeMove = false;
+
+            if(e.Button == MouseButtons.Right && (_frameRectangle != null || _frameCircle != null))
+            {
+                int area = 0;
+                if (_frameRectangle != null)
+                {
+                    foreach (var shape in _shapes)
+                    {
+                        shape.Selected = false;
+                        area += shape.Area;
+                    }
+                    var r = new Random();
+
+                    _frameRectangle.ColorBorder = Color.FromArgb(r.Next(255), r.Next(255), r.Next(255));
+                    _frameRectangle.ColorFill = Color.FromArgb(100, _frameRectangle.ColorBorder);
+
+                    _shapes.Add(_frameRectangle);
+
+                    _frameRectangle.Selected = true;
+                    area += _frameRectangle.Area;
+                }
+                else if (_frameCircle != null)
+                {
+                    foreach (var shape in _shapes)
+                    {
+                        shape.Selected = false;
+                        area += shape.Area;
+                    }
+                    var r = new Random();
+
+                    _frameCircle.ColorBorder = Color.FromArgb(r.Next(255), r.Next(255), r.Next(255));
+                    _frameCircle.ColorFill = Color.FromArgb(100, _frameCircle.ColorBorder);
+
+                    _shapes.Add(_frameCircle);
+
+                    _frameCircle.Selected = true;
+                    area += _frameCircle.Area;
+                }
+                toolStripStatusLabelArea.Text = area.ToString();
+            }
+
+            _frameRectangle = null;
+            _frameCircle = null;
+
+            Invalidate();
+        }
+
+        private void FormScene_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Delete)
+                return;
+
+            for (int shape = 0; shape < _shapes.Count(); shape++)
+                if (_shapes[shape].Selected)
+                    _shapes.RemoveAt(shape);
+
+            toolStripStatusLabelArea.Text = area().ToString();
+
+            Invalidate();
+        }
+
+        private void FormScene_DoubleClick(object sender, EventArgs e)
+        {
+            foreach (var shape in _shapes)
+                if (shape.Selected)
+                {
+                    if(shape.GetType() == typeof(Circle))
+                    {
+                        var fp = new FormPropertiesCircle();
+                        fp.Circle = (Circle)shape;
+
+                        fp.ShowDialog();     
+                    }
+                    else
+                    {
+                        var fp = new FormPropertiesRectangle();
+                        fp.Rectangle = (Rectangle)shape;
+
+                        fp.ShowDialog();
+                    }
+
+                    Invalidate();
+                    break;
+                }
+        }
+
+        private void selectToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            using (var cd = new ColorDialog())
+            {
+                if (cd.ShowDialog() == DialogResult.OK)
+                    foreach (var rectangle in _shapes
+                        .Where(r => r.ColorBorder == cd.Color))
+                    {
+                        rectangle.Selected = true;
+                    }
+            }
+            Invalidate();
+        }
+
+        private void rectangleToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            DrawMode = 0;
+        }
+
+        private void circleToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            DrawMode = 1;
+        }
+
+        private void saveToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            using (SaveFileDialog sfd = new SaveFileDialog())
+            {
+                sfd.Filter = "XML files (*.xml)|*.xml";
+                if (sfd.ShowDialog() == DialogResult.OK && sfd.FileName != "")
+                {
+                    var formatter = new BinaryFormatter();
+          
+                    using (var stream = sfd.OpenFile())
+                    {
+                        formatter.Serialize(stream, _shapes);
+                    }
+                }
+            }
+        }
+
+        private void loadToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Filter = "XML files (*.xml)|*.xml";
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        var formatter = new BinaryFormatter();
+                        using (var stream = ofd.OpenFile())
+                        {
+                            _shapes = (List<Shape>)formatter.Deserialize(stream);
+                        }
+                        toolStripStatusLabelArea.Text = area().ToString();
+                    }
+                    catch
+                    {
+                        MessageBox.Show("The file cannot be opened!", "Error", MessageBoxButtons.OK);
+                    }
+                }
+            }
+        }
+    }
+    
+    public partial class FormPropertiesRectangle : Form
+    {
+        public Rectangle Rectangle { get; set; }
+
+        public Color Color => buttonColor.BackColor;
+
+        public FormPropertiesRectangle()
+        {
+            InitializeComponent();
+        }
+
+        private void buttonOK_Click(object sender, EventArgs e)
+        {
+            Rectangle.Width = int.Parse(textBoxWidth.Text);
+            Rectangle.Height = int.Parse(textBoxHeight.Text);
+
+            Rectangle.ColorBorder = buttonColor.BackColor;
+            Rectangle.ColorFill = Color.FromArgb(100, Rectangle.ColorBorder);
+
+            DialogResult = DialogResult.OK;
+        }
+
+        private void buttonCancel_Click(object sender, EventArgs e)
+        {
+            DialogResult = DialogResult.Cancel;
+        }
+
+        private void FormProperties_Load(object sender, EventArgs e)
+        {
+            textBoxWidth.Text = Rectangle.Width.ToString();
+            textBoxHeight.Text = Rectangle.Height.ToString();
+            textBoxStart.Text = $"({Rectangle.CoordsStart.X},{Rectangle.CoordsStart.Y})";
+            textBoxEnd.Text = $"({Rectangle.CoordsEnd.X},{Rectangle.CoordsEnd.Y})";
+
+            toolStripStatusLabelArea.Text = Rectangle.Area.ToString();
+            buttonColor.BackColor = Rectangle.ColorBorder;
+        }
+
+        private void buttonColor_Click(object sender, EventArgs e)
+        {
+            var cd = new ColorDialog();
+
+            if (cd.ShowDialog() == DialogResult.OK)
+                buttonColor.BackColor = cd.Color;
+        }
+
+        private void textBoxWidth_TextChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                textBoxEnd.Text = $"({Rectangle.CoordsStart.X + int.Parse(textBoxWidth.Text)},{Rectangle.CoordsEnd.Y})";
+                Rectangle.CoordsEnd = Rectangle.CoordsConvert(textBoxEnd.Text);
+            }
+            catch (FormatException)
+            {
+                textBoxWidth.Text = "0";
+            }
+        }
+
+        private void textBoxHeight_TextChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                textBoxEnd.Text = $"({Rectangle.CoordsEnd.X},{Rectangle.CoordsStart.Y + int.Parse(textBoxHeight.Text)})";
+                Rectangle.CoordsEnd = Rectangle.CoordsConvert(textBoxEnd.Text);
+            }
+            catch (FormatException)
+            {
+                textBoxHeight.Text = "0";
+            }
+        }
+
+        private void textBoxStart_TextChanged(object sender, EventArgs e)
+        {
+            Rectangle.CoordsStart = Rectangle.CoordsConvert(textBoxStart.Text);
+            textBoxWidth.Text = (Math.Abs(Rectangle.CoordsStart.X - Rectangle.CoordsEnd.X)).ToString();
+            textBoxHeight.Text = (Math.Abs(Rectangle.CoordsStart.Y - Rectangle.CoordsEnd.Y)).ToString();
+        }
+
+        private void textBoxEnd_TextChanged(object sender, EventArgs e)
+        {
+            Rectangle.CoordsEnd = Rectangle.CoordsConvert(textBoxEnd.Text);
+            textBoxWidth.Text = (Math.Abs(Rectangle.CoordsStart.X - Rectangle.CoordsEnd.X)).ToString();
+            textBoxHeight.Text = (Math.Abs(Rectangle.CoordsStart.Y - Rectangle.CoordsEnd.Y)).ToString();
+        }
+    }
+    
+    public partial class FormPropertiesCircle : Form
+    {
+        public Circle Circle { get; set; }
+
+        public Color Color => buttonColor.BackColor;
+
+        public FormPropertiesCircle()
+        {
+            InitializeComponent();
+        }
+
+        private void buttonOK_Click(object sender, EventArgs e)
+        {
+            Circle.Radius = int.Parse(textBoxDiameter.Text);
+
+            Circle.ColorBorder = buttonColor.BackColor;
+            Circle.ColorFill = Color.FromArgb(100, Circle.ColorBorder);
+
+            DialogResult = DialogResult.OK;
+        }
+
+        private void buttonCancel_Click(object sender, EventArgs e)
+        {
+            DialogResult = DialogResult.Cancel;
+        }
+
+        private void FormPropertiesCirle_Load(object sender, EventArgs e)
+        {
+            textBoxDiameter.Text = Circle.Radius.ToString();
+            textBoxStart.Text = $"({Circle.CoordsStart.X},{Circle.CoordsStart.Y})";
+            textBoxEnd.Text = $"({Circle.CoordsEnd.X},{Circle.CoordsEnd.Y})";
+
+            toolStripStatusLabelArea.Text = Circle.Area.ToString();
+            buttonColor.BackColor = Circle.ColorBorder;
+        }
+
+        private void buttonColor_Click(object sender, EventArgs e)
+        {
+            var cd = new ColorDialog();
+
+            if (cd.ShowDialog() == DialogResult.OK)
+                buttonColor.BackColor = cd.Color;
+        }
+
+        private void textBoxDiameter_TextChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                textBoxEnd.Text = $"({Circle.CoordsStart.X + int.Parse(textBoxDiameter.Text)},{Circle.CoordsStart.Y + int.Parse(textBoxDiameter.Text)})";
+                Circle.CoordsEnd = Circle.CoordsConvert(textBoxEnd.Text);
+            }
+            catch(FormatException)
+            {
+                textBoxDiameter.Text = "0";
+            }
+        }
+
+        private void textBoxStart_TextChanged(object sender, EventArgs e)
+        {
+            Circle.CoordsStart = Circle.CoordsConvert(textBoxStart.Text);
+            textBoxDiameter.Text = (Math.Abs(Circle.CoordsStart.X - Circle.CoordsEnd.X)).ToString();
+        }
+
+        private void textBoxEnd_TextChanged(object sender, EventArgs e)
+        {
+            Circle.CoordsEnd = Circle.CoordsConvert(textBoxEnd.Text);
+            textBoxDiameter.Text = (Math.Abs(Circle.CoordsStart.X - Circle.CoordsEnd.X)).ToString();
+        }
+
+    }
+}
